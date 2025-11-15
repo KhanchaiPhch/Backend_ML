@@ -1,85 +1,9 @@
-==============================
-FastAPI Prediction API Setup
-==============================
+# pip install fastapi
+# pip install uvicorn[standard]
+# pip install joblib
+# pip install pandas
+# pip install scikit-learn
+# pip install xgboost 
+# pip install matplotlib seaborn
 
-Step 1: สร้าง Virtual Environment (venv)
-----------------------------------------
-1. เปิด Command Prompt (Windows)
 
-2. สร้าง venv:
-   python -m venv venv
-3. Activate venv:
-   venv\Scripts\activate
-   จะเห็น (venv) ขึ้นหน้า prompt แสดงว่าเปิดใช้งาน venv แล้ว
-
-Step 2: ติดตั้ง Dependencies
------------------------------
-ใน venv ให้รันคำสั่ง:
-1. ติดตั้ง FastAPI
-   pip install fastapi
-2. ติดตั้ง Uvicorn (server สำหรับ FastAPI)
-   pip install "uvicorn[standard]"
-3. ติดตั้ง Scikit-learn (สำหรับ train โมเดล)
-   pip install scikit-learn
-4. ติดตั้ง Pandas & Numpy (จัดการ DataFrame / Array)
-   pip install pandas numpy
-5. ติดตั้ง Joblib (บันทึก/โหลดโมเดล)
-   pip install joblib
-6. ติดตั้ง Matplotlib & Seaborn (ถ้าต้องการ plot)
-   pip install matplotlib seaborn
-7. ติดตั้ง XGBoost (ถ้าใช้โมเดล XGBoost)
-   pip install xgboost
-
-Step 3: เตรียมไฟล์โปรเจ็กต์
----------------------------
-โฟลเดอร์ตัวอย่าง:
-
-backend_ML/
-│
-├── data/
-│   └── arl_ready_feature.csv   # ข้อมูลสำหรับเทรน
-│
-├── model/
-│   ├── xgb_model.pkl           # โมเดลที่เทรนเสร็จ
-│   └── scaler.pkl              # StandardScaler สำหรับ normalization
-│
-├── main.py                     # ฟังก์ชัน prediction
-└── server.py                   # FastAPI routes
-
-Step 4: main.py
-----------------
-- โหลดโมเดล & scaler
-- เขียนฟังก์ชัน predict_passenger(data: dict)
-- แปลง dict → DataFrame → scale → predict → return list
-
-Step 5: server.py
------------------
-- สร้าง FastAPI app
-- ใช้ Pydantic BaseModel กำหนด schema ของ input
-- POST route /predict รับ JSON → call main.predict_passenger → return JSON
-
-Step 6: รัน FastAPI
--------------------
-1. อยู่ใน venv
-2. รันคำสั่ง:
-   uvicorn server:app --reload
-3. หลังรันเสร็จ
-   - URL API: http://127.0.0.1:8000
-   - Swagger UI: http://127.0.0.1:8000/docs
-
-Step 7: ทดสอบ POST /predict
------------------------------
-- ใช้ Swagger UI หรือ Postman
-- ส่ง JSON เช่น:
-{
-    "feature1": 10.5,
-    "feature2": 23.7,
-    "feature3": 5.1
-}
-- จะได้ผลลัพธ์ prediction เป็น JSON
-
-Step 8: หมายเหตุสำคัญ
-----------------------
-- ต้อง activate venv ก่อนรัน Python/uvicorn
-- ถ้าใช้ scaler อย่าลืมบันทึกและโหลด scaler ด้วย
-- ตรวจสอบว่า feature JSON ที่ส่งตรงกับโมเดล
