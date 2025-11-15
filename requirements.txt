@@ -1,9 +1,10 @@
-# pip install fastapi
-# pip install uvicorn[standard]
-# pip install joblib
-# pip install pandas
-# pip install scikit-learn
-# pip install xgboost 
-# pip install matplotlib seaborn
+fastapi
+uvicorn[standard]
+joblib
+pandas
+scikit-learn
+xgboost 
+matplotlib 
+seaborn
 
 
