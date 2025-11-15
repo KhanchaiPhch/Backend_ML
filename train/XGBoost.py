@@ -59,9 +59,9 @@ print(f"RMSE: {rmse:.2f}")
 print(f"R²  : {r2:.2f}")
 
 # Save Model & Scaler
-# joblib.dump(model, "../xgb_model.pkl")
-# joblib.dump(scaler, "../scaler.pkl")
-# print("Saved XGBoost model and scaler to files.")
+joblib.dump(model, "../xgb_model.pkl")
+joblib.dump(scaler, "../scaler.pkl")
+print("Saved XGBoost model and scaler to files.")
 
 # Plot Actual vs Predicted
 plt.figure(figsize=(10, 6))

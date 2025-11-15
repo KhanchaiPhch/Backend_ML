@@ -11,7 +11,6 @@ import matplotlib.pyplot as plt
 df = pd.read_csv("../data/arl_ready_feature.csv")
 # df.head()   # ใช้ดูตัวอย่างข้อมูล (optional)
 
-
 # Prepare Features (X) & Target (y)
 X = df.drop(
     columns=["passenger_origin", "is_festival", "temp_bin", "temp_range", "cloudcover"]

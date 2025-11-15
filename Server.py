@@ -1,32 +1,24 @@
-from flask import Flask, request, jsonify
-import joblib
-import pandas as pd
+# server.py
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from main import predict_passenger
 
-app = Flask(__name__)
+# สร้าง FastAPI app
+app = FastAPI(title="Passenger Prediction API")
 
-# โหลดโมเดล KNN ที่เทรนเสร็จแล้ว
-model = joblib.load('knn_model.pkl')
+# กำหนด schema ของ input
+class PassengerFeatures(BaseModel):
+    # ใส่ชื่อฟีเจอร์ที่โมเดลต้องการ
+    feature1: float
+    feature2: float
+    feature3: float
+    # ... เพิ่มตามจำนวนฟีเจอร์จริง
 
-# API endpoint /predict
-@app.route('/predict', methods=['POST'])
-def predict():
+@app.post("/predict")
+def predict(features: PassengerFeatures):
     try:
-        # รับข้อมูล JSON จาก request
-        data = request.get_json()
-        if not data:
-            return jsonify({"status": "Failed", "message": "No input data provided"}), 400
-
-        # แปลงข้อมูลเป็น DataFrame
-        input_df = pd.DataFrame([data])
-
-        # ทำ Prediction
-        prediction = model.predict(input_df)
-
-        # ส่งผลลัพธ์กลับเป็น JSON
-        return jsonify({"status": "OK", "prediction": prediction.tolist()})
-
+        data_dict = features.dict()  # แปลง Pydantic object เป็น dict
+        prediction = predict_passenger(data_dict)
+        return {"status": "OK", "prediction": prediction}
     except Exception as e:
-        return jsonify({"status": "Failed", "message": str(e)}), 500
-
-if __name__ == '__main__':
-    app.run(debug=True)
+        raise HTTPException(status_code=500, detail=str(e))
