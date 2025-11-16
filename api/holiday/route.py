@@ -1,17 +1,13 @@
 import requests
 
-API_URL = "https://api.iapp.co.th/data/thai-holidays/holidays"
+API_URL = "https://api.iapp.co.th/data/thai-holidays/holidays/range"
 API_KEY = "PCx7qg91X4Obd4wEbz2X2loOrIO5Q5st"
 
-def get_thai_holidays(days_after=3):
-    """
-    ดึงรายการวันหยุดไทยจาก API iApp
-    :param days_after: จำนวนวันหลังจากวันนี้ที่ต้องการดึงข้อมูล
-    :return: dict {date_string: holiday_name} เช่น {"2025-01-01": "วันปีใหม่"}
-    """
+def get_thai_holidays(start_date: str, end_date: str):
     params = {
         "apikey": API_KEY,
-        "days_after": days_after
+        "start_date": start_date,
+        "end_date": end_date
     }
 
     try:
@@ -19,14 +15,14 @@ def get_thai_holidays(days_after=3):
         response.raise_for_status()
         data = response.json()
 
-        # สมมติ data['holidays'] เป็น list ของ dict ที่มี 'date' และ 'name'
-        holidays = {item["date"]: item["name"] for item in data.get("holidays", [])}
-        return holidays
+        # ได้เฉพาะวันที่
+        return [item["date"] for item in data.get("holidays", [])]
+
     except requests.RequestException as e:
-        print("Error while calling API:", e)
-        return {}
+        print("Error calling holidays API:", e)
+        return []
 
 if __name__ == "__main__":
-    holidays = get_thai_holidays()
+    holidays = get_thai_holidays("2025-12-05","2025-12-31")
     print("จำนวนวันหยุด:", len(holidays))
     print(holidays)

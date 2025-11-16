@@ -11,5 +11,5 @@ app = FastAPI(title="ML Server API")
 # connect_db()
 
 # include router
-app.include_router(predict_router, prefix="/api/predict")
+app.include_router(predict_router, prefix="/api/predict", tags=["predict"])
 # app.include_router(test_api, prefix="/api/test")
