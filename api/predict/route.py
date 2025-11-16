@@ -9,7 +9,6 @@ model = joblib.load("new_XGBoost.pkl")
 
 router = APIRouter()
 
-
 @router.post("/predict")
 def predict(features: PassengerFeatures):
     try:
@@ -93,10 +92,10 @@ def predict(features: PassengerFeatures):
             "is_A6",
             "is_A7",
             "is_A8",
+            "is_holiday",
             "is_weekend",
-            "cloudcover",
+            "rain_flag",
             "temp",
-            "temp_range",
             "is_hour_5",
             "is_hour_6",
             "is_hour_7",

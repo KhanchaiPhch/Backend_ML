@@ -6,5 +6,6 @@ scikit-learn
 xgboost 
 matplotlib 
 seaborn
+pymongo
 
 
