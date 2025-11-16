@@ -10,11 +10,14 @@ from xgboost import XGBRegressor  # <-- เปลี่ยนตรงนี้
 # Load Data
 df = pd.read_csv("../data/arl_ready_feature.csv")
 
+
 # Prepare Features (X) & Target (y)
 X = df.drop(
     columns=["passenger_origin", "is_festival", "temp_bin", "temp_range", "cloudcover"]
 )
+
 y = df["passenger_origin"]
+
 
 # Train/Test Split
 X_train, X_test, y_train, y_test = train_test_split(
@@ -39,8 +42,8 @@ X_test_scaled = scaler.transform(X_test_cleaned)
 model = XGBRegressor(
     n_estimators=100,  # จำนวน tree
     learning_rate=0.1,  # step size
-    max_depth=3,        # ความลึกของ tree
-    random_state=42
+    max_depth=3,  # ความลึกของ tree
+    random_state=42,
 )
 model.fit(X_train_scaled, y_train_cleaned)
 
@@ -59,9 +62,9 @@ print(f"RMSE: {rmse:.2f}")
 print(f"R²  : {r2:.2f}")
 
 # Save Model & Scaler
-joblib.dump(model, "../xgb_model.pkl")
-joblib.dump(scaler, "../scaler.pkl")
-print("Saved XGBoost model and scaler to files.")
+# joblib.dump(model, "../xgb_model.pkl")
+# joblib.dump(scaler, "../scaler.pkl")
+# print("Saved XGBoost model and scaler to files.")
 
 # Plot Actual vs Predicted
 plt.figure(figsize=(10, 6))

@@ -1,23 +1,15 @@
-# main.py
-import joblib
-import pandas as pd
+# server.py
+from fastapi import FastAPI
+# from database import connect_db
 
-# โหลดโมเดลและ scaler
-model = joblib.load('xgb_model.pkl')     # หรือ knn_model.pkl
-scaler = joblib.load('scaler.pkl')
+from api.predict.route import router as predict_router
+from api.test.route import router as test_api
 
-def predict_passenger(data: dict):
-    """
-    data: dict ที่รับมาจาก user เช่น {"feature1": value1, "feature2": value2, ...}
-    return: list ของค่าที่ทำนาย
-    """
-    # แปลง dict เป็น DataFrame
-    input_df = pd.DataFrame([data])
+app = FastAPI(title="ML Server API")
 
-    # Scale features
-    input_scaled = scaler.transform(input_df)
+# connect database
+# connect_db()
 
-    # ทำ Prediction
-    prediction = model.predict(input_scaled)
-
-    return prediction.tolist()
+# include router
+app.include_router(predict_router, prefix="/api/predict")
+app.include_router(test_api, prefix="/api/test")
