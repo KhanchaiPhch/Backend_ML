@@ -7,5 +7,6 @@ xgboost
 matplotlib 
 seaborn
 pymongo
+requests
 
 
