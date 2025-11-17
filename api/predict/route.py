@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from schemaModel.passenger_features import PassengerFeatures
 from schemaModel.passenger_forecast_3day import PassengerForecast3Day
+from schemaModel.recommendation import Recommendation
 import joblib
 import numpy as np
 import pandas as pd
@@ -334,6 +335,62 @@ def get_prediction_from_db(features: PassengerFeatures):
             "requested_hour": features.hour,
             "returned_hours": [r["hour"] for r in response],
             "results": response,
+        }
+
+    finally:
+        db.close()
+
+@router.post("/recommendation")
+def recommend_low_density(features: Recommendation):
+    """
+    แนะนำ 3 ชั่วโมงที่มีจำนวนผู้โดยสารน้อยที่สุด
+    สำหรับสถานี + วันที่ ที่ส่งมา
+    """
+    # แปลง string -> date object
+    try:
+        prediction_date = datetime.strptime(features.date, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid date format, expected YYYY-MM-DD",
+        )
+
+    db = SessionLocal()
+    try:
+        # ดึงทุกชั่วโมงของสถานี+วันที่นั้น แล้ว sort ตามจำนวนผู้โดยสารจากน้อยไปมาก
+        records = (
+            db.query(Prediction)
+            .filter(
+                Prediction.station == features.station,
+                Prediction.prediction_date == prediction_date,
+            )
+            .order_by(Prediction.prediction_passenger.asc())
+            .limit(3)  # เอาแค่ 3 อันดับแรกที่คนน้อยที่สุด
+            .all()
+        )
+
+        if not records:
+            raise HTTPException(
+                status_code=404,
+                detail="No prediction results found for given station/date",
+            )
+
+        # format response
+        results = []
+        for r in records:
+            results.append({
+                "station": r.station,
+                "prediction_date": r.prediction_date.strftime("%Y-%m-%d"),
+                "hour": r.hour,
+                "prediction_passenger": r.prediction_passenger,
+                "model_version": r.model_version,
+            })
+
+        return {
+            "station": features.station,
+            "date": features.date,
+            "count": len(results),
+            "results": results,
         }
 
     finally:

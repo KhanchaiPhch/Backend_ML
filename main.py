@@ -12,7 +12,8 @@ app = FastAPI(title="ML Server API")
 
 # CORS
 origins = [
-    "http://localhost:8080",  # React
+    "http://localhost:8080",
+    "https://jirawatchn.github.io"
 ]
 
 app.add_middleware(
