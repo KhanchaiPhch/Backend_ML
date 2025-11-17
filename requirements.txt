@@ -9,4 +9,6 @@ seaborn
 pymongo
 requests
 SQLAlchemy
+psycopg2-binary
+
 
