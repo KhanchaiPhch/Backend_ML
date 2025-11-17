@@ -1,15 +1,26 @@
-# server.py
 from fastapi import FastAPI
-# from database import connect_db
+from fastapi.middleware.cors import CORSMiddleware
 
+from db import Base, engine
+from models.predictions import Prediction
 from api.predict.route import router as predict_router
-# from api.test.route import router as test_api
+
+# สร้าง table ถ้ายังไม่มี
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="ML Server API")
 
-# connect database
-# connect_db()
+# CORS
+origins = [
+    "http://localhost:8080",  # React
+]
 
-# include router
-app.include_router(predict_router, prefix="/api/predict", tags=["predict"])
-# app.include_router(test_api, prefix="/api/test")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,     # frontend ที่อนุญาต
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(predict_router, prefix="/api/predict")
