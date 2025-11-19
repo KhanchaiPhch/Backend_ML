@@ -2,6 +2,8 @@ from fastapi import APIRouter, HTTPException
 from schemaModel.passenger_features import PassengerFeatures
 from schemaModel.passenger_forecast_3day import PassengerForecast3Day
 from schemaModel.recommendation import Recommendation
+from schemaModel.overview import PassengerOverview
+
 import joblib
 import numpy as np
 import pandas as pd
@@ -390,6 +392,60 @@ def recommend_low_density(features: Recommendation):
             "station": features.station,
             "date": features.date,
             "count": len(results),
+            "results": results,
+        }
+
+    finally:
+        db.close()
+        
+@router.post("/overview")
+def get_daily_overview(payload: PassengerOverview):
+    """
+    ดึงผล prediction ทั้งวัน (ทุกชั่วโมง) ของสถานีและวันที่ที่เลือก
+    เช่น station=A1, date=2025-11-20 → ดึงชั่วโมง 0–23 (แล้วแต่ที่มีใน DB)
+    """
+    # แปลง string → date object
+    try:
+        prediction_date = datetime.strptime(payload.date, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid date format, expected YYYY-MM-DD",
+        )
+
+    db = SessionLocal()
+    try:
+        records = (
+            db.query(Prediction)
+            .filter(
+                Prediction.station == payload.station,
+                Prediction.prediction_date == prediction_date,
+            )
+            .order_by(Prediction.hour.asc())
+            .all()
+        )
+
+        if not records:
+            raise HTTPException(
+                status_code=404,
+                detail="No prediction results found for given station/date",
+            )
+
+        # format response
+        results = []
+        for r in records:
+            results.append({
+                "station": r.station,
+                "prediction_date": r.prediction_date.strftime("%Y-%m-%d"),
+                "hour": r.hour,
+                "prediction_passenger": r.prediction_passenger,
+                "model_version": r.model_version,
+            })
+
+        return {
+            "station": payload.station,
+            "prediction_date": payload.date,
+            "hours": [r["hour"] for r in results],
             "results": results,
         }
 
