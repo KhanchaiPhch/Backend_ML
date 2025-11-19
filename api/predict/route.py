@@ -11,7 +11,7 @@ from api.holiday.route import get_thai_holidays  # holiday api
 from sqlalchemy.dialects.postgresql import insert
 from db import SessionLocal
 from models.predictions import Prediction
-from config import MODEL_VERSION   # ถ้าเก็บ MODEL_VERSION ไว้ใน config.py
+from config import MODEL_VERSION  # ถ้าเก็บ MODEL_VERSION ไว้ใน config.py
 from datetime import datetime
 
 model = joblib.load("new_XGBoost.pkl")
@@ -73,6 +73,7 @@ FEATURE_COLUMNS = [
     "is_hour_23",
     "is_peak_time",
 ]
+
 
 # ------------------ 1) ทำนายปกติทีละจุด ------------------ #
 @router.post("/")
@@ -250,7 +251,9 @@ def predict_3day(payload: PassengerForecast3Day):
         for r in results:
             stmt = insert(Prediction).values(
                 station=r["station"],
-                prediction_date=r["date"],        # string "YYYY-MM-DD" -> Date, SQLAlchemy แปลงให้ได้
+                prediction_date=r[
+                    "date"
+                ],  # string "YYYY-MM-DD" -> Date, SQLAlchemy แปลงให้ได้
                 hour=r["hour"],
                 prediction_passenger=r["prediction"],
                 model_version=MODEL_VERSION,
@@ -284,6 +287,7 @@ def predict_3day(payload: PassengerForecast3Day):
         "model_version": MODEL_VERSION,
     }
 
+
 @router.post("/predictions")
 def get_prediction_from_db(features: PassengerFeatures):
     """
@@ -300,7 +304,7 @@ def get_prediction_from_db(features: PassengerFeatures):
         )
 
     start_hour = features.hour
-    end_hour = min(start_hour + 4, 23)   # จำกัดไม่เกิน 23
+    end_hour = min(start_hour + 4, 23)  # จำกัดไม่เกิน 23
 
     db = SessionLocal()
     try:
@@ -325,13 +329,15 @@ def get_prediction_from_db(features: PassengerFeatures):
         # format response
         response = []
         for r in records:
-            response.append({
-                "station": r.station,
-                "prediction_date": r.prediction_date.strftime("%Y-%m-%d"),
-                "hour": r.hour,
-                "prediction_passenger": r.prediction_passenger,
-                "model_version": r.model_version,
-            })
+            response.append(
+                {
+                    "station": r.station,
+                    "prediction_date": r.prediction_date.strftime("%Y-%m-%d"),
+                    "hour": r.hour,
+                    "prediction_passenger": r.prediction_passenger,
+                    "model_version": r.model_version,
+                }
+            )
 
         return {
             "requested_hour": features.hour,
@@ -342,12 +348,14 @@ def get_prediction_from_db(features: PassengerFeatures):
     finally:
         db.close()
 
+
 @router.post("/recommendation")
 def recommend_low_density(features: Recommendation):
     """
     แนะนำ 3 ชั่วโมงที่มีจำนวนผู้โดยสารน้อยที่สุด
-    สำหรับสถานี + วันที่ ที่ส่งมา
+    ภายในช่วงเวลาที่เลือก ±3 ชั่วโมง
     """
+
     # แปลง string -> date object
     try:
         prediction_date = datetime.strptime(features.date, "%Y-%m-%d").date()
@@ -357,47 +365,65 @@ def recommend_low_density(features: Recommendation):
             detail="Invalid date format, expected YYYY-MM-DD",
         )
 
+    if not (0 <= features.hour <= 23):
+        raise HTTPException(
+            status_code=400,
+            detail="hour must be between 0 and 23",
+        )
+
+    center_hour = features.hour
+
+    # ช่วงเวลา center_hour - 2 ถึง center_hour + 2
+    start_hour = max(center_hour - 2, 0)
+    end_hour = min(center_hour + 2, 23)
+
     db = SessionLocal()
     try:
-        # ดึงทุกชั่วโมงของสถานี+วันที่นั้น แล้ว sort ตามจำนวนผู้โดยสารจากน้อยไปมาก
+        # ดึงเฉพาะชั่วโมงในช่วง [start_hour, end_hour]
         records = (
             db.query(Prediction)
             .filter(
                 Prediction.station == features.station,
                 Prediction.prediction_date == prediction_date,
+                Prediction.hour >= start_hour,
+                Prediction.hour <= end_hour,
             )
             .order_by(Prediction.prediction_passenger.asc())
-            .limit(3)  # เอาแค่ 3 อันดับแรกที่คนน้อยที่สุด
+            .limit(3)  # หา 3 ชั่วโมงที่คนน้อยสุด
             .all()
         )
 
         if not records:
             raise HTTPException(
                 status_code=404,
-                detail="No prediction results found for given station/date",
+                detail="No prediction results found for given station/date/time range",
             )
 
-        # format response
-        results = []
-        for r in records:
-            results.append({
+        results = [
+            {
                 "station": r.station,
                 "prediction_date": r.prediction_date.strftime("%Y-%m-%d"),
                 "hour": r.hour,
                 "prediction_passenger": r.prediction_passenger,
                 "model_version": r.model_version,
-            })
+            }
+            for r in records
+        ]
 
         return {
             "station": features.station,
             "date": features.date,
+            "center_hour": center_hour,
+            "start_hour": start_hour,
+            "end_hour": end_hour,
             "count": len(results),
             "results": results,
         }
 
     finally:
         db.close()
-        
+
+
 @router.post("/overview")
 def get_daily_overview(payload: PassengerOverview):
     """
@@ -434,13 +460,15 @@ def get_daily_overview(payload: PassengerOverview):
         # format response
         results = []
         for r in records:
-            results.append({
-                "station": r.station,
-                "prediction_date": r.prediction_date.strftime("%Y-%m-%d"),
-                "hour": r.hour,
-                "prediction_passenger": r.prediction_passenger,
-                "model_version": r.model_version,
-            })
+            results.append(
+                {
+                    "station": r.station,
+                    "prediction_date": r.prediction_date.strftime("%Y-%m-%d"),
+                    "hour": r.hour,
+                    "prediction_passenger": r.prediction_passenger,
+                    "model_version": r.model_version,
+                }
+            )
 
         return {
             "station": payload.station,
