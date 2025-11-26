@@ -12,7 +12,7 @@ from sqlalchemy.dialects.postgresql import insert
 from db import SessionLocal
 from models.predictions import Prediction
 from config import MODEL_VERSION  # ถ้าเก็บ MODEL_VERSION ไว้ใน config.py
-from datetime import datetime
+from datetime import date, datetime
 
 model = joblib.load("new_XGBoost.pkl")
 router = APIRouter()
@@ -75,6 +75,64 @@ FEATURE_COLUMNS = [
 ]
 
 
+def build_model_input_for_hour(
+    prediction_date: date, station: str, hour: int
+) -> pd.DataFrame:
+    """
+    ใช้ logic เดียวกับ predict_single ในการ encode feature
+    แต่รับ date เป็น date object + hour เป็น int
+    """
+    # --- Validate station & hour ---
+    if station not in STATIONS:
+        raise HTTPException(status_code=400, detail="Invalid station")
+
+    if hour not in HOUR_RANGE:
+        raise HTTPException(status_code=400, detail="Invalid hour")
+
+    # --- Date & holiday encode ---
+    date_str = prediction_date.strftime("%Y-%m-%d")
+    holidays = get_thai_holidays(start_date=date_str, end_date=date_str)
+    is_holiday = 1 if holidays else 0
+
+    # --- Weekday encode ---
+    weekday_data = {col: 0 for col in WEEKDAY_MAP}
+    weekday_data[WEEKDAY_MAP[prediction_date.weekday()]] = 1
+    is_weekend = 1 if prediction_date.weekday() >= 5 else 0
+
+    # --- Station encode ---
+    station_data = {col: 0 for col in STATION_COLS}
+    station_data[f"is_{station}"] = 1
+
+    # --- Hour encode ---
+    hour_cols = [f"is_hour_{h}" for h in HOUR_RANGE]
+    hour_data = {col: 0 for col in hour_cols}
+    hour_data[f"is_hour_{hour}"] = 1
+
+    # --- Peak time flag ---
+    is_peak_time = 1 if hour in PEAK_HOURS else 0
+
+    # --- รวม dict เป็น 1 แถว ---
+    data_dict = {}
+    data_dict.update(weekday_data)
+    data_dict.update(station_data)
+    data_dict.update(
+        {
+            "is_holiday": is_holiday,
+            "is_weekend": is_weekend,
+            "rain_flag": 0,  # ตอนนี้ fix ไว้ก่อน
+            "temp": 86.63,  # ตอนนี้ fix ไว้ก่อน
+        }
+    )
+    data_dict.update(hour_data)
+    data_dict["is_peak_time"] = is_peak_time
+
+    # เผื่ออนาคต FEATURE_COLUMNS มีเพิ่ม/ลด
+    for col in FEATURE_COLUMNS:
+        data_dict.setdefault(col, 0)
+
+    return pd.DataFrame([data_dict])[FEATURE_COLUMNS]
+
+
 # ------------------ 1) ทำนายปกติทีละจุด ------------------ #
 @router.post("/")
 def predict_single(features: PassengerFeatures):
@@ -118,7 +176,7 @@ def predict_single(features: PassengerFeatures):
                 "is_holiday": is_holiday,
                 "is_weekend": is_weekend,
                 "rain_flag": 0,
-                "temp": 30.0,
+                "temp": 86.63,
             }
         )
         data_dict.update(hour_data)
@@ -213,7 +271,7 @@ def predict_3day(payload: PassengerForecast3Day):
                         "is_holiday": is_holiday,
                         "is_weekend": is_weekend,
                         "rain_flag": 0,
-                        "temp": 30.0,
+                        "temp": 86.63,
                     }
                 )
                 data_dict.update(hour_data)
@@ -291,10 +349,12 @@ def predict_3day(payload: PassengerForecast3Day):
 @router.post("/predictions")
 def get_prediction_from_db(features: PassengerFeatures):
     """
-    ดึงผล prediction จาก DB แบบ 5 ชั่วโมงถัดจาก hour ที่ส่งมา
+    ดึงผล prediction แบบต่อเนื่อง 5 ชั่วโมงจาก hour ที่ส่งมา
     เช่น hour=6 → ดึง 6,7,8,9,10
+    ถ้ามีใน DB แล้วใช้ค่าจาก DB
+    ถ้าไม่มีใน DB ให้เรียก model ทำนายสดแทน
     """
-    # แปลงเป็น date object
+    # 1) แปลง date string -> date object
     try:
         prediction_date = datetime.strptime(features.date, "%Y-%m-%d").date()
     except ValueError:
@@ -303,46 +363,89 @@ def get_prediction_from_db(features: PassengerFeatures):
             detail="Invalid date format, expected YYYY-MM-DD",
         )
 
+    # 2) validate station & hour เบื้องต้น
+    if features.station not in STATIONS:
+        raise HTTPException(status_code=400, detail="Invalid station")
+
+    if features.hour not in HOUR_RANGE:
+        raise HTTPException(status_code=400, detail="Invalid hour")
+
+    # 3) คำนวณช่วงชั่วโมงที่จะดึง/ทำนาย
     start_hour = features.hour
     end_hour = min(start_hour + 4, 23)  # จำกัดไม่เกิน 23
+    target_hours = list(range(start_hour, end_hour + 1))
 
     db = SessionLocal()
     try:
-        records = (
+        # 4) ดึงข้อมูลที่มีอยู่แล้วใน DB สำหรับช่วงชั่วโมงนี้
+        existing_records = (
             db.query(Prediction)
             .filter(
                 Prediction.station == features.station,
                 Prediction.prediction_date == prediction_date,
-                Prediction.hour >= start_hour,
-                Prediction.hour <= end_hour,
+                Prediction.hour.in_(target_hours),
             )
             .order_by(Prediction.hour.asc())
             .all()
         )
 
-        if not records:
-            raise HTTPException(
-                status_code=404,
-                detail="No prediction results found for given station/date/hour range",
-            )
+        # map hour -> record เพื่อเช็คว่าชั่วโมงไหนมีอยู่แล้ว
+        records_by_hour = {r.hour: r for r in existing_records}
 
-        # format response
-        response = []
-        for r in records:
-            response.append(
-                {
-                    "station": r.station,
-                    "prediction_date": r.prediction_date.strftime("%Y-%m-%d"),
-                    "hour": r.hour,
-                    "prediction_passenger": r.prediction_passenger,
-                    "model_version": r.model_version,
-                }
-            )
+        results = []
+
+        for h in target_hours:
+            if h in records_by_hour:
+                # 5.1 ใช้ค่าที่มีอยู่ใน DB
+                r = records_by_hour[h]
+                results.append(
+                    {
+                        "station": r.station,
+                        "prediction_date": r.prediction_date.strftime("%Y-%m-%d"),
+                        "hour": r.hour,
+                        "prediction_passenger": r.prediction_passenger,
+                        "model_version": r.model_version,
+                        "source": "db",  # optional: บอกว่าเอามาจาก DB
+                    }
+                )
+            else:
+                # 5.2 ไม่มีใน DB → เรียก model ทำนายสด
+                df_input = build_model_input_for_hour(
+                    prediction_date=prediction_date,
+                    station=features.station,
+                    hour=h,
+                )
+
+                log_pred = model.predict(df_input.values)
+                prediction_value = float(np.expm1(log_pred[0]))
+
+                results.append(
+                    {
+                        "station": features.station,
+                        "prediction_date": prediction_date.strftime("%Y-%m-%d"),
+                        "hour": h,
+                        "prediction_passenger": prediction_value,
+                        "model_version": MODEL_VERSION,
+                        "source": "model",  # optional: บอกว่าเป็น live prediction
+                    }
+                )
+
+                new_record = Prediction(
+                    station=features.station,
+                    prediction_date=prediction_date,
+                    hour=h,
+                    prediction_passenger=prediction_value,
+                    model_version=MODEL_VERSION,
+                )
+                db.add(new_record)
+
+        # commit เฉพาะในกรณีที่มีการเพิ่มข้อมูล
+        db.commit()
 
         return {
             "requested_hour": features.hour,
-            "returned_hours": [r["hour"] for r in response],
-            "results": response,
+            "returned_hours": [r["hour"] for r in results],
+            "results": results,
         }
 
     finally:
@@ -353,10 +456,16 @@ def get_prediction_from_db(features: PassengerFeatures):
 def recommend_low_density(features: Recommendation):
     """
     แนะนำ 3 ชั่วโมงที่มีจำนวนผู้โดยสารน้อยที่สุด
-    ภายในช่วงเวลาที่เลือก ±3 ชั่วโมง
+    ภายในช่วงเวลาที่เลือก ±2 ชั่วโมง
+
+    เงื่อนไข:
+    - ใช้ช่วงชั่วโมง [center_hour-2, center_hour+2] ที่อยู่ใน HOUR_RANGE (5–23)
+    - ถ้า DB มีบางชั่วโมงแล้ว → ใช้
+    - ถ้าบางชั่วโมงยังไม่มี → ทำนายใหม่, เก็บลง DB ให้ครบช่วงก่อน
+    - สุดท้ายเลือก 3 ชั่วโมงที่คนน้อยที่สุดจากช่วงนั้น
     """
 
-    # แปลง string -> date object
+    # 1) แปลง string -> date object
     try:
         prediction_date = datetime.strptime(features.date, "%Y-%m-%d").date()
     except ValueError:
@@ -365,6 +474,11 @@ def recommend_low_density(features: Recommendation):
             detail="Invalid date format, expected YYYY-MM-DD",
         )
 
+    # 2) validate station
+    if features.station not in STATIONS:
+        raise HTTPException(status_code=400, detail="Invalid station")
+
+    # 3) validate hour (อินพุต)
     if not (0 <= features.hour <= 23):
         raise HTTPException(
             status_code=400,
@@ -373,42 +487,94 @@ def recommend_low_density(features: Recommendation):
 
     center_hour = features.hour
 
-    # ช่วงเวลา center_hour - 2 ถึง center_hour + 2
-    start_hour = max(center_hour - 2, 0)
-    end_hour = min(center_hour + 2, 23)
+    # 4) สร้างช่วง center_hour - 2 ถึง center_hour + 2 (ตาม requirement เดิม)
+    raw_start_hour = max(center_hour - 2, 0)
+    raw_end_hour = min(center_hour + 2, 23)
+
+    # พิจารณาเฉพาะชั่วโมงที่โมเดลรองรับ (HOUR_RANGE = 5–23)
+    candidate_hours = [
+        h for h in range(raw_start_hour, raw_end_hour + 1)
+        if h in HOUR_RANGE
+    ]
+
+    if len(candidate_hours) < 3:
+        # ทางทฤษฎีไม่ควรเกิด เพราะที่ขอบ (5 หรือ 23) ก็ยังได้อย่างน้อย 3 ชม.
+        raise HTTPException(
+            status_code=400,
+            detail="Not enough valid hours in range for recommendation.",
+        )
+
+    start_hour = min(candidate_hours)
+    end_hour = max(candidate_hours)
 
     db = SessionLocal()
     try:
-        # ดึงเฉพาะชั่วโมงในช่วง [start_hour, end_hour]
-        records = (
+        # 5) ดึงข้อมูลที่มีอยู่แล้วใน DB สำหรับทุกชั่วโมงใน candidate_hours
+        existing_records = (
             db.query(Prediction)
             .filter(
                 Prediction.station == features.station,
                 Prediction.prediction_date == prediction_date,
-                Prediction.hour >= start_hour,
-                Prediction.hour <= end_hour,
+                Prediction.hour.in_(candidate_hours),
             )
-            .order_by(Prediction.prediction_passenger.asc())
-            .limit(3)  # หา 3 ชั่วโมงที่คนน้อยสุด
             .all()
         )
 
-        if not records:
-            raise HTTPException(
-                status_code=404,
-                detail="No prediction results found for given station/date/time range",
-            )
+        records_by_hour: dict[int, Prediction] = {r.hour: r for r in existing_records}
 
-        results = [
-            {
-                "station": r.station,
-                "prediction_date": r.prediction_date.strftime("%Y-%m-%d"),
-                "hour": r.hour,
-                "prediction_passenger": r.prediction_passenger,
-                "model_version": r.model_version,
-            }
-            for r in records
-        ]
+        # ชั่วโมงที่ยังไม่มีใน DB
+        missing_hours = [h for h in candidate_hours if h not in records_by_hour]
+
+        predicted_hours = set()
+
+        # 6) ถ้ามี missing_hours → ทำนายให้ครบ และเก็บลง DB
+        if missing_hours:
+            for h in missing_hours:
+                df_input = build_model_input_for_hour(
+                    prediction_date=prediction_date,
+                    station=features.station,
+                    hour=h,
+                )
+
+                log_pred = model.predict(df_input.values)
+                prediction_value = float(np.expm1(log_pred[0]))
+
+                new_record = Prediction(
+                    station=features.station,
+                    prediction_date=prediction_date,
+                    hour=h,
+                    prediction_passenger=prediction_value,
+                    model_version=MODEL_VERSION,
+                )
+                db.add(new_record)
+                records_by_hour[h] = new_record
+                predicted_hours.add(h)
+
+            db.commit()
+
+        # 7) ตอนนี้ต้องมีข้อมูลครบทุกชั่วโมงใน candidate_hours แล้ว
+        all_records = [records_by_hour[h] for h in candidate_hours]
+
+        # 8) เลือก 3 ชั่วโมงที่คนน้อยที่สุด
+        all_records_sorted = sorted(
+            all_records,
+            key=lambda r: r.prediction_passenger,
+        )
+        top3 = all_records_sorted[:3]
+
+        results = []
+        for r in top3:
+            source = "model" if r.hour in predicted_hours else "db"
+            results.append(
+                {
+                    "station": r.station,
+                    "prediction_date": r.prediction_date.strftime("%Y-%m-%d"),
+                    "hour": r.hour,
+                    "prediction_passenger": r.prediction_passenger,
+                    "model_version": r.model_version,
+                    "source": source,  # optional ไว้ debug ว่ามาจากไหน
+                }
+            )
 
         return {
             "station": features.station,
@@ -416,7 +582,7 @@ def recommend_low_density(features: Recommendation):
             "center_hour": center_hour,
             "start_hour": start_hour,
             "end_hour": end_hour,
-            "count": len(results),
+            "count": len(results),  # ปกติควรเป็น 3 เสมอ
             "results": results,
         }
 
@@ -427,10 +593,12 @@ def recommend_low_density(features: Recommendation):
 @router.post("/overview")
 def get_daily_overview(payload: PassengerOverview):
     """
-    ดึงผล prediction ทั้งวัน (ทุกชั่วโมง) ของสถานีและวันที่ที่เลือก
-    เช่น station=A1, date=2025-11-20 → ดึงชั่วโมง 0–23 (แล้วแต่ที่มีใน DB)
+    ดึงผล prediction ทั้งวันของสถานีและวันที่ที่เลือก
+    - ใช้ทุกชั่วโมงที่โมเดลรองรับ: 5–23 (HOUR_RANGE)
+    - ถ้ามีบางชั่วโมงใน DB แล้ว → ใช้จาก DB
+    - ถ้าบางชั่วโมงยังไม่มี → ทำนายใหม่ให้ครบทุกชั่วโมงในวันนั้น แล้วเก็บลง DB ก่อนส่งออก
     """
-    # แปลง string → date object
+    # 1) แปลง string → date object
     try:
         prediction_date = datetime.strptime(payload.date, "%Y-%m-%d").date()
     except ValueError:
@@ -439,27 +607,64 @@ def get_daily_overview(payload: PassengerOverview):
             detail="Invalid date format, expected YYYY-MM-DD",
         )
 
+    # 2) validate station
+    if payload.station not in STATIONS:
+        raise HTTPException(status_code=400, detail="Invalid station")
+
+    # 3) ช่วงชั่วโมงที่ต้องการ overview ทั้งวัน = HOUR_RANGE (เช่น 5–23)
+    candidate_hours = list(HOUR_RANGE)
+
     db = SessionLocal()
     try:
-        records = (
+        # 4) ดึงข้อมูลที่มีอยู่แล้วใน DB สำหรับ station/date นี้
+        existing_records = (
             db.query(Prediction)
             .filter(
                 Prediction.station == payload.station,
                 Prediction.prediction_date == prediction_date,
+                Prediction.hour.in_(candidate_hours),
             )
-            .order_by(Prediction.hour.asc())
             .all()
         )
 
-        if not records:
-            raise HTTPException(
-                status_code=404,
-                detail="No prediction results found for given station/date",
-            )
+        records_by_hour: dict[int, Prediction] = {r.hour: r for r in existing_records}
+
+        # ชั่วโมงที่ยังไม่มีใน DB
+        missing_hours = [h for h in candidate_hours if h not in records_by_hour]
+        predicted_hours = set()
+
+        # 5) ถ้ามี missing_hours → ทำนายให้ครบ และเก็บลง DB
+        if missing_hours:
+            for h in missing_hours:
+                df_input = build_model_input_for_hour(
+                    prediction_date=prediction_date,
+                    station=payload.station,
+                    hour=h,
+                )
+
+                log_pred = model.predict(df_input.values)
+                prediction_value = float(np.expm1(log_pred[0]))
+
+                new_record = Prediction(
+                    station=payload.station,
+                    prediction_date=prediction_date,
+                    hour=h,
+                    prediction_passenger=prediction_value,
+                    model_version=MODEL_VERSION,
+                )
+                db.add(new_record)
+                records_by_hour[h] = new_record
+                predicted_hours.add(h)
+
+            db.commit()
+
+        # 6) ตอนนี้ต้องมีข้อมูลครบทุกชั่วโมงใน candidate_hours แล้ว
+        all_records = [records_by_hour[h] for h in sorted(candidate_hours)]
 
         # format response
         results = []
-        for r in records:
+        for r in all_records:
+            source = "model" if r.hour in predicted_hours else "db"
             results.append(
                 {
                     "station": r.station,
@@ -467,6 +672,7 @@ def get_daily_overview(payload: PassengerOverview):
                     "hour": r.hour,
                     "prediction_passenger": r.prediction_passenger,
                     "model_version": r.model_version,
+                    "source": source,  # optional: ดูได้ว่ามาจาก DB หรือทำนายสด
                 }
             )
 
@@ -474,6 +680,7 @@ def get_daily_overview(payload: PassengerOverview):
             "station": payload.station,
             "prediction_date": payload.date,
             "hours": [r["hour"] for r in results],
+            "count": len(results),
             "results": results,
         }
 
